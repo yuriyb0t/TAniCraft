@@ -1,0 +1,12 @@
+[package]
+name = "tanicraft"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = { version = "0.33.0", default-features = false, features = ["glow", "default_fonts"] }
+egui = "0.33.0"
+png = "0.18.1"
+rfd = "0.17.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
