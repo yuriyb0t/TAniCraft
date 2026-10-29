@@ -305,7 +305,7 @@ impl App {
             return;
         };
         let uid = self.doc.layers[li].uid;
-        let doc_pos = doc_rect.min + (screen - doc_rect.min) / self.view.zoom;
+        let doc_pos: Pos2 = ((screen - doc_rect.min) / self.view.zoom).to_pos2();
 
         let (radius, hardness, alpha, color, erase, spacing) = match self.tool {
             Tool::Eraser => (
@@ -380,7 +380,7 @@ impl App {
         let k = (1.0 - s.smoothing * 0.92).clamp(0.12, 1.0);
         let mut dirty = s.dirty;
         for screen in points {
-            let raw = doc_rect.min + (*screen - doc_rect.min) / self.view.zoom;
+            let raw: Pos2 = ((*screen - doc_rect.min) / self.view.zoom).to_pos2();
             s.smoothed += (raw - s.smoothed) * k;
             let target = s.smoothed;
             let dist = s.last.distance(target);
