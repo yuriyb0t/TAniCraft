@@ -17,11 +17,13 @@
 | Format / Feature | Status | Plan |
 |---|---|---|
 | `.tcraft` | Working | Open and save native projects |
-| PNG | Partially working | Current-frame export; expand import/export |
+| PNG | Working | Frame export, image-sequence export, and import to a keyframe |
+| JPEG | Working | Import to a keyframe |
+| GIF | Working | Export animations (animated GIF) |
+| Video (MP4/WebM) | Working | Export via external ffmpeg |
 | `.xfl` | Planned | Read XML project structure, timeline, layers, and assets |
 | `.fla` | Planned | Investigate container variants and import supported versions |
 | SVG | Planned | Import and edit vector objects |
-| GIF / image sequences | Planned | Import and export animations |
 | Symbols, tweens, library | Planned | Reconstruct editable Animate project objects |
 
 **Important:** FLA/XFL projects may contain features that TAniCraft's current document model cannot represent. The importer should report unsupported elements instead of silently dropping them. Compatibility with particular Adobe Animate versions must be verified against test files. The first priority is reliable XFL import, followed by supported FLA variants. FLA/XFL export is not currently available.
@@ -50,7 +52,7 @@ On Windows, the compiled executables are located at `target\debug\tanicraft.exe`
 | Layers | Add, duplicate, delete, reorder, show/hide, lock, rename |
 | Onion skin | Preview neighboring keyframes with fading |
 | History | Undo/redo for pixel and structural edits; 40-step limit |
-| Files | Open/save `.tcraft`; export current frame to PNG |
+| Files | Open/save `.tcraft`; import PNG/JPEG to a keyframe; export current frame to PNG, PNG image sequence, animated GIF, and MP4/WebM video (via ffmpeg) |
 
 ## Keyboard Shortcuts
 

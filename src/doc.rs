@@ -740,7 +740,7 @@ fn encode_png(bmp: &Bitmap) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn decode_png(bytes: &[u8]) -> Result<Bitmap, String> {
+pub fn decode_png(bytes: &[u8]) -> Result<Bitmap, String> {
     let dec = png::Decoder::new(Cursor::new(bytes));
     let mut reader = dec.read_info().map_err(|e| e.to_string())?;
     let (w, h, color, depth) = {

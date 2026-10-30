@@ -16,9 +16,13 @@ use crate::ui;
 pub enum Cmd {
     New,
     Open,
+    ImportImage,
     Save,
     SaveAs,
     ExportPng,
+    ExportPngSeq,
+    ExportGif,
+    ExportVideo,
     Exit,
     Undo,
     Redo,
@@ -148,6 +152,7 @@ pub struct App {
     pub show_guides: bool,
     pub show_fill_picker: bool,
     pub want_close: bool,
+    pub error_msg: Option<String>,
 }
 
 impl App {
@@ -200,6 +205,7 @@ impl App {
             show_guides: true,
             show_fill_picker: false,
             want_close: false,
+            error_msg: None,
         }
     }
 
@@ -207,6 +213,11 @@ impl App {
 
     pub fn notify(&mut self, msg: impl Into<String>) {
         self.status = msg.into();
+    }
+
+    /// Показывает модальный диалог с ошибкой (для экспорта/импорта и т.п.).
+    pub fn error(&mut self, msg: impl Into<String>) {
+        self.error_msg = Some(msg.into());
     }
 
     pub fn frame_count(&self) -> usize {
@@ -454,6 +465,41 @@ impl App {
         }
     }
 
+    fn import_image(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Image", &["png", "jpg", "jpeg"])
+            .pick_file()
+        else {
+            return;
+        };
+        match crate::import::load_image(&path) {
+            Ok(img) => {
+                let li = self.sel_layer;
+                let frame = self.current_frame;
+                let before = self.doc.clone();
+                if self.doc.layers[li].kind_at(frame) != FrameKind::Key {
+                    if !self.doc.ensure_keyframe(li, frame) {
+                        return;
+                    }
+                }
+                // Рисуем картинку по центру холста, обрезая вылезающее за края.
+                let mut target = Bitmap::new(self.doc.width as usize, self.doc.height as usize);
+                let ox = (self.doc.width as i32 - img.w as i32) / 2;
+                let oy = (self.doc.height as i32 - img.h as i32) / 2;
+                target.draw_bitmap(&img, ox, oy, 1.0);
+                if let Some(f) = self.doc.layers[li].frames.get_mut(frame) {
+                    if f.kind == FrameKind::Key {
+                        f.bitmap = Some(target);
+                    }
+                }
+                self.commit(before);
+                self.tex_epoch += 1;
+                self.notify(format!("Imported {}", path.display()));
+            }
+            Err(e) => self.error(format!("Import failed: {e}")),
+        }
+    }
+
     fn export_png(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("PNG image", &["png"])
@@ -464,7 +510,60 @@ impl App {
         };
         match crate::doc::export_frame_png(&self.doc, self.current_frame, &path) {
             Ok(()) => self.notify(format!("Exported {}", path.display())),
-            Err(e) => self.notify(format!("Export failed: {e}")),
+            Err(e) => self.error(format!("Export failed: {e}")),
+        }
+    }
+
+    fn export_png_sequence(&mut self) {
+        let Some(dir) = rfd::FileDialog::new()
+            .set_file_name(self.doc.name.clone())
+            .pick_folder()
+        else {
+            return;
+        };
+        match crate::export::export_png_sequence(&self.doc, &dir) {
+            Ok(()) => self.notify(format!("Exported {} frames to {}", self.frame_count(), dir.display())),
+            Err(e) => self.error(format!("Export failed: {e}")),
+        }
+    }
+
+    fn export_gif(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Animated GIF", &["gif"])
+            .set_file_name(format!("{}.gif", self.doc.name))
+            .save_file()
+        else {
+            return;
+        };
+        let path = ensure_ext(path, "gif");
+        match crate::export::export_gif(&self.doc, &path, self.doc.fps) {
+            Ok(()) => self.notify(format!("Exported {}", path.display())),
+            Err(e) => self.error(format!("Export failed: {e}")),
+        }
+    }
+
+    fn export_video(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("MP4 video", &["mp4"])
+            .add_filter("WebM video", &["webm"])
+            .set_file_name(format!("{}.mp4", self.doc.name))
+            .save_file()
+        else {
+            return;
+        };
+        // Выбираем кодек по выбранному расширению.
+        let ext = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_else(|| "mp4".into());
+        let ext = match ext.as_str() {
+            "webm" => "webm",
+            _ => "mp4",
+        };
+        let path = ensure_ext(path, ext);
+        match crate::export::export_video(&self.doc, &path, self.doc.fps, ext) {
+            Ok(()) => self.notify(format!("Exported {}", path.display())),
+            Err(e) => self.error(format!("Export failed: {e}")),
         }
     }
 
@@ -494,6 +593,7 @@ impl App {
                 self.new_doc_open = true;
             }
             Cmd::Open => self.open_file(),
+            Cmd::ImportImage => self.import_image(),
             Cmd::Save => {
                 self.save(false);
             }
@@ -501,6 +601,9 @@ impl App {
                 self.save(true);
             }
             Cmd::ExportPng => self.export_png(),
+            Cmd::ExportPngSeq => self.export_png_sequence(),
+            Cmd::ExportGif => self.export_gif(),
+            Cmd::ExportVideo => self.export_video(),
             Cmd::Exit => {
                 self.want_close = true;
             }
@@ -791,6 +894,10 @@ impl App {
                             cmd = Some(Cmd::Open);
                             ui.close();
                         }
+                        if ui.button("Import Image…").clicked() {
+                            cmd = Some(Cmd::ImportImage);
+                            ui.close();
+                        }
                         ui.separator();
                         if ui.button("Save            Ctrl+S").clicked() {
                             cmd = Some(Cmd::Save);
@@ -803,6 +910,18 @@ impl App {
                         ui.separator();
                         if ui.button("Export Frame (PNG)   Ctrl+E").clicked() {
                             cmd = Some(Cmd::ExportPng);
+                            ui.close();
+                        }
+                        if ui.button("Export Image Sequence (PNG)…").clicked() {
+                            cmd = Some(Cmd::ExportPngSeq);
+                            ui.close();
+                        }
+                        if ui.button("Export Animated GIF…").clicked() {
+                            cmd = Some(Cmd::ExportGif);
+                            ui.close();
+                        }
+                        if ui.button("Export Video (MP4/WebM)…").clicked() {
+                            cmd = Some(Cmd::ExportVideo);
                             ui.close();
                         }
                         ui.separator();
@@ -1411,6 +1530,16 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // Перехват закрытия окна ОС: при несохранённых изменениях отменяем
+        // закрытие и показываем диалог, иначе даём eframe закрыть окно самому.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.unsaved_open {
+            if self.dirty {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.pending = Some(Cmd::Exit);
+                self.unsaved_open = true;
+            }
+        }
+
         self.handle_shortcuts(ctx);
         self.menu_bar(ctx);
         self.tab_bar(ctx);
@@ -1431,5 +1560,14 @@ impl eframe::App for App {
         if self.want_close {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
+    }
+}
+
+/// Дописывает расширение `ext` к пути, если пользователь ввёл имя без расширения.
+fn ensure_ext(path: std::path::PathBuf, ext: &str) -> std::path::PathBuf {
+    if path.extension().is_none() {
+        path.with_extension(ext)
+    } else {
+        path
     }
 }

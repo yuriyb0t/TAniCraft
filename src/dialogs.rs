@@ -14,6 +14,36 @@ impl App {
         self.unsaved_dialog(ctx);
         self.about_dialog(ctx);
         self.fill_picker_dialog(ctx);
+        self.error_dialog(ctx);
+    }
+
+    fn error_dialog(&mut self, ctx: &Context) {
+        let Some(msg) = self.error_msg.clone() else {
+            return;
+        };
+        let mut open = true;
+        let mut close = false;
+        egui::Window::new("Error")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .frame(ui::panel_frame(theme::PANEL).inner_margin(egui::Margin::same(12)))
+            .show(ctx, |ui| {
+                ui.set_width(400.0);
+                ui.label(RichText::new(&msg).size(11.0).color(theme::TEXT));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("OK").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+            });
+        if !open || close {
+            self.error_msg = None;
+        }
     }
 
     fn new_document_dialog(&mut self, ctx: &Context) {
@@ -339,8 +369,12 @@ impl App {
             }
         } else if discard {
             self.unsaved_open = false;
-            self.pending = None;
             self.dirty = false;
+            // «Don’t Save» всё равно должен выполнить отложенную команду
+            // (New/Open/Exit), а не молча её терять.
+            if let Some(cmd) = self.pending.take() {
+                self.exec(cmd);
+            }
         } else if cancel {
             self.unsaved_open = false;
             self.pending = None;
