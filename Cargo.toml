@@ -2,6 +2,8 @@
 name = "tanicraft"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "Free and open-source 2D animation editor in the spirit of Adobe Animate"
 
 [dependencies]
 eframe = { version = "0.33.0", default-features = false, features = ["glow", "default_fonts"] }
@@ -12,3 +14,14 @@ png = "0.18.1"
 rfd = "0.17.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+
+# Ship a small executable. `target/release` also contains dependency rlibs,
+# build scripts and debug artifacts (hundreds of MB); only the .exe is shipped.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false
+incremental = false

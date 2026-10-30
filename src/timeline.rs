@@ -24,6 +24,10 @@ impl App {
                 self.timeline_toolbar(ui);
                 let body = ui.available_rect_before_wrap();
                 if body.height() > 20.0 {
+                    // Claim the full body rect so the panel reports its real
+                    // height to egui; otherwise a resized timeline collapses
+                    // back to its minimum height on the next frame.
+                    ui.allocate_rect(body, Sense::hover());
                     self.timeline_body(ui, body);
                 }
             });
@@ -500,13 +504,7 @@ impl App {
                                 );
                             }
                         }
-                        FrameKind::Empty => {
-                            p.circle_stroke(
-                                center,
-                                2.0,
-                                Stroke::new(1.0_f32, Color32::from_gray(0x4a)),
-                            );
-                        }
+                        FrameKind::Empty => {}
                         FrameKind::Hold => {}
                     }
 

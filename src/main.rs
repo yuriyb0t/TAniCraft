@@ -1,5 +1,10 @@
 //! TAniCraft — a raster animation studio in the spirit of Adobe Animate.
 
+// В релизе приложение запускается как GUI-программа: Windows не открывает рядом
+// с ним лишнее консольное окно. В debug-сборке консоль остаётся, чтобы видеть
+// вывод паник и предупреждений при разработке.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app;
 mod canvas;
 mod dialogs;

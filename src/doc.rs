@@ -111,7 +111,7 @@ impl Bitmap {
         let inner = radius * hard;
         let band = (radius - inner).max(0.0001);
         let r2 = radius * radius;
-        let (bw, bh) = (self.w, self.h);
+        let bw = self.w;
         let data = self.data_mut();
         for y in y0..y1 {
             let dy = y as f32 + 0.5 - cy;
@@ -533,6 +533,55 @@ impl Document {
         self.height = h.max(1);
     }
 
+    /// Straight (non-premultiplied) RGBA of the composited document at a
+    /// single pixel. Visible layers are blended over the background, matching
+    /// [`Self::flatten`]. Returns `None` for coordinates outside the canvas.
+    pub fn sample_pixel(&self, frame: usize, x: usize, y: usize) -> Option<[u8; 4]> {
+        if x >= self.width as usize || y >= self.height as usize {
+            return None;
+        }
+        let bg_a = self.bg[3] as f32 / 255.0;
+        let mut acc = [
+            self.bg[0] as f32 / 255.0 * bg_a,
+            self.bg[1] as f32 / 255.0 * bg_a,
+            self.bg[2] as f32 / 255.0 * bg_a,
+            bg_a,
+        ];
+        for layer in &self.layers {
+            if !layer.visible {
+                continue;
+            }
+            let Some(bmp) = layer.bitmap_at(frame) else {
+                continue;
+            };
+            if x >= bmp.w || y >= bmp.h {
+                continue;
+            }
+            let i = (y * bmp.w + x) * 4;
+            let px = &bmp.pixels()[i..i + 4];
+            let src_a = px[3] as f32 / 255.0;
+            if src_a <= 0.0 {
+                continue;
+            }
+            let inv = 1.0 - src_a;
+            for (c, &value) in px.iter().take(3).enumerate() {
+                acc[c] = acc[c] * inv + value as f32 / 255.0;
+            }
+            acc[3] = acc[3] * inv + src_a;
+        }
+        if acc[3] <= 0.0 {
+            return Some([0, 0, 0, 0]);
+        }
+        let alpha = acc[3].min(1.0);
+        let unpremultiply = |v: f32| ((v / acc[3]).clamp(0.0, 1.0) * 255.0).round() as u8;
+        Some([
+            unpremultiply(acc[0]),
+            unpremultiply(acc[1]),
+            unpremultiply(acc[2]),
+            (alpha * 255.0).round() as u8,
+        ])
+    }
+
     /// Flatten every visible layer at `frame` onto the document background.
     pub fn flatten(&self, frame: usize) -> Bitmap {
         let mut out = Bitmap::new(self.width as usize, self.height as usize);
@@ -773,6 +822,37 @@ pub fn decode_png(bytes: &[u8]) -> Result<Bitmap, String> {
         _ => return Err(format!("unsupported png format {color:?}/{depth:?}")),
     }
     Ok(Bitmap::from_rgba_straight(w, h, &straight))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_pixel_uses_background_and_visible_layers() {
+        let mut doc = Document::new("test", 4, 3, 24.0, [255, 255, 255, 255]);
+        assert_eq!(doc.sample_pixel(0, 0, 0), Some([255, 255, 255, 255]));
+
+        doc.layers[0].frames[0]
+            .key_bitmap_mut()
+            .unwrap()
+            .fill([128, 0, 0, 255]);
+        assert_eq!(doc.sample_pixel(0, 0, 0), Some([128, 0, 0, 255]));
+
+        doc.layers[0].visible = false;
+        assert_eq!(doc.sample_pixel(0, 0, 0), Some([255, 255, 255, 255]));
+        assert_eq!(doc.sample_pixel(0, 4, 0), None);
+    }
+
+    #[test]
+    fn sample_pixel_blends_semi_transparent_ink() {
+        let mut doc = Document::new("test", 2, 2, 24.0, [255, 255, 255, 255]);
+        doc.layers[0].frames[0]
+            .key_bitmap_mut()
+            .unwrap()
+            .fill([128, 0, 0, 128]);
+        assert_eq!(doc.sample_pixel(0, 1, 1), Some([255, 127, 127, 255]));
+    }
 }
 
 /// Export the flattened current frame as a PNG file.

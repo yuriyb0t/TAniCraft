@@ -136,6 +136,10 @@ pub struct App {
     pub stroke: Option<Stroke>,
 
     pub status: String,
+    /// Wall-clock time and generation of the current status message.
+    pub status_since: f64,
+    pub status_serial: u64,
+    pub status_seen: u64,
 
     pub new_doc_open: bool,
     pub new_doc: DocSetup,
@@ -185,6 +189,9 @@ impl App {
             blank_cache: HashMap::new(),
             stroke: None,
             status: "Brush (B) — draw on a keyframe. F6 adds a keyframe, F5 extends the timeline.".into(),
+            status_since: 0.0,
+            status_serial: 0,
+            status_seen: 0,
             new_doc_open: false,
             new_doc: DocSetup {
                 name: "Untitled-1".into(),
@@ -213,6 +220,44 @@ impl App {
 
     pub fn notify(&mut self, msg: impl Into<String>) {
         self.status = msg.into();
+        self.status_serial = self.status_serial.wrapping_add(1);
+    }
+
+    /// Default hint for the active tool. Shown whenever a transient status
+    /// message has expired.
+    fn tool_hint(&self) -> &'static str {
+        match self.tool {
+            Tool::Brush => {
+                "Brush (B) — draw on a keyframe. F6 adds a keyframe, F5 extends the timeline."
+            }
+            Tool::Eraser => "Eraser (E) — remove pixels. [ and ] change the size.",
+            Tool::Eyedropper => {
+                "Eyedropper (I) — click the stage to pick a colour. Alt+click also works with Brush and Eraser."
+            }
+            Tool::Hand => {
+                "Hand (H) — drag the stage to pan. Space-drag and the middle mouse button work with any tool."
+            }
+            Tool::Zoom => {
+                "Zoom (Z) — click to zoom in, Alt+click to zoom out. Ctrl+wheel zooms around the cursor."
+            }
+        }
+    }
+
+    /// Clears transient status messages after a few seconds.
+    fn tick_status(&mut self, ctx: &Context) {
+        let now = ctx.input(|i| i.time);
+        if self.status_seen != self.status_serial {
+            self.status_seen = self.status_serial;
+            self.status_since = now;
+            return;
+        }
+        if now - self.status_since > 5.0 {
+            let hint = self.tool_hint();
+            if self.status != hint {
+                self.status = hint.to_string();
+            }
+            self.status_since = now;
+        }
     }
 
     /// Показывает модальный диалог с ошибкой (для экспорта/импорта и т.п.).
@@ -789,6 +834,25 @@ impl App {
                 if i.key_pressed(Key::Minus) {
                     cmds.push(Cmd::ZoomOut);
                 }
+                // ... Ctrl+N/O/S/E/Z/Y/Num0/Plus/Minus ...
+
+                // Ctrl + колесо: зум холста, только если курсор над стейджем.
+                let scroll = i.raw_scroll_delta.y;
+                if scroll.abs() > 0.0 {
+                    let over_stage = i
+                        .pointer
+                        .hover_pos()
+                        .map(|p| self.stage_rect.contains(p))
+                        .unwrap_or(false);
+                    if over_stage {
+                        let steps = (scroll / 120.0).round() as i32;
+                        if steps > 0 {
+                            for _ in 0..steps { cmds.push(Cmd::ZoomIn); }
+                        } else if steps < 0 {
+                            for _ in steps..0 { cmds.push(Cmd::ZoomOut); }
+                        }
+                    }
+                }
             } else {
                 if i.key_pressed(Key::B) {
                     tool = Some(Tool::Brush);
@@ -796,11 +860,17 @@ impl App {
                 if i.key_pressed(Key::E) {
                     tool = Some(Tool::Eraser);
                 }
+                if i.key_pressed(Key::I) {
+                    tool = Some(Tool::Eyedropper);
+                }
                 if i.key_pressed(Key::H) {
                     tool = Some(Tool::Hand);
                 }
                 if i.key_pressed(Key::Z) {
                     tool = Some(Tool::Zoom);
+                }
+                if i.modifiers.alt && i.key_pressed(Key::O) {
+                    cmds.push(Cmd::OnionToggle);
                 }
                 if i.key_pressed(Key::F5) {
                     cmds.push(if shift { Cmd::RemoveFrame } else { Cmd::InsertFrame });
@@ -1043,7 +1113,7 @@ impl App {
                             ui.close();
                         }
                         ui.separator();
-                        ui.label(egui::RichText::new("B Brush   E Eraser   H Hand   Z Zoom").size(11.0).color(theme::TEXT_DIM));
+                        ui.label(egui::RichText::new("B Brush   E Eraser   I Eyedropper   H Hand   Z Zoom").size(11.0).color(theme::TEXT_DIM));
                         ui.label(egui::RichText::new("F5 Frame   F6 Keyframe   F7 Blank Key").size(11.0).color(theme::TEXT_DIM));
                     });
 
@@ -1051,10 +1121,11 @@ impl App {
                     ui.separator();
                     ui.add_space(6.0);
                     for (t, icon) in [
-                        (Tool::Brush, Icon::Brush),
+                     /*   (Tool::Brush, Icon::Brush),
                         (Tool::Eraser, Icon::Eraser),
+                        (Tool::Eyedropper, Icon::Eyedropper),
                         (Tool::Hand, Icon::Hand),
-                        (Tool::Zoom, Icon::Zoom),
+                        (Tool::Zoom, Icon::Zoom),*/
                     ] {
                         if ui::tool_btn(ui, icon, self.tool == t, &format!("{} ({})", t.name(), t.letter())).clicked() {
                             tool = Some(t);
@@ -1196,7 +1267,7 @@ impl App {
     }
 
     fn tools_panel(&mut self, ctx: &Context) {
-        egui::SidePanel::right("tools_panel")
+        egui::SidePanel::left("tools_panel")
             .exact_width(62.0)
             .resizable(false)
             .frame(ui::panel_frame(theme::PANEL).inner_margin(egui::Margin::symmetric(4, 6)))
@@ -1216,7 +1287,7 @@ impl App {
                                 (Icon::Brush, Some(Tool::Brush), "Brush (B)"),
                                 (Icon::Eraser, Some(Tool::Eraser), "Eraser (E)"),
                                 (Icon::Bucket, None, "Paint Bucket (K) — not yet available"),
-                                (Icon::Eyedropper, None, "Eyedropper (I) — not yet available"),
+                                (Icon::Eyedropper, Some(Tool::Eyedropper), "Eyedropper (I) — sample a colour from the stage"),
                                 (Icon::Text, None, "Text (T) — not yet available"),
                                 (Icon::Hand, Some(Tool::Hand), "Hand (H)"),
                                 (Icon::Zoom, Some(Tool::Zoom), "Zoom (Z)"),
@@ -1312,6 +1383,7 @@ impl App {
             let icon = match self.tool {
                 Tool::Brush => Icon::Brush,
                 Tool::Eraser => Icon::Eraser,
+                Tool::Eyedropper => Icon::Eyedropper,
                 Tool::Hand => Icon::Hand,
                 Tool::Zoom => Icon::Zoom,
             };
@@ -1349,6 +1421,29 @@ impl App {
                         .size(10.5)
                         .color(theme::TEXT_FAINT),
                 );
+            }
+            Tool::Eyedropper => {
+                ui.label(
+                    egui::RichText::new(
+                        "Click the stage to sample the composited colour.\n\
+                         Alt+click with the Brush or Eraser samples without switching tools.",
+                    )
+                    .size(11.0)
+                    .color(theme::TEXT_DIM),
+                );
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(2.0);
+                    ui.color_edit_button_srgba(&mut self.brush.color)
+                        .on_hover_text("Current fill colour");
+                    let c = self.brush.color.to_srgba_unmultiplied();
+                    ui.label(
+                        egui::RichText::new(format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]))
+                            .monospace()
+                            .size(11.0)
+                            .color(theme::TEXT),
+                    );
+                });
             }
             Tool::Hand => {
                 ui.label(egui::RichText::new("Drag the stage to pan.\nSpace-drag works with any tool.").size(11.0).color(theme::TEXT_DIM));
@@ -1540,6 +1635,7 @@ impl eframe::App for App {
             }
         }
 
+        self.tick_status(ctx);
         self.handle_shortcuts(ctx);
         self.menu_bar(ctx);
         self.tab_bar(ctx);

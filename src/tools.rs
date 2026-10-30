@@ -6,6 +6,7 @@ use egui::Color32;
 pub enum Tool {
     Brush,
     Eraser,
+    Eyedropper,
     Hand,
     Zoom,
 }
@@ -15,6 +16,7 @@ impl Tool {
         match self {
             Tool::Brush => "Brush",
             Tool::Eraser => "Eraser",
+            Tool::Eyedropper => "Eyedropper",
             Tool::Hand => "Hand",
             Tool::Zoom => "Zoom",
         }
@@ -24,6 +26,7 @@ impl Tool {
         match self {
             Tool::Brush => "B",
             Tool::Eraser => "E",
+            Tool::Eyedropper => "I",
             Tool::Hand => "H",
             Tool::Zoom => "Z",
         }

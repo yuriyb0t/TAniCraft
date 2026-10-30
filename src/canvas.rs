@@ -1,6 +1,6 @@
 //! Stage rendering and painting input.
 
-use egui::{Color32, Context, Event, Key, Pos2, Rect, Sense, Stroke as EStroke, Ui, Vec2};
+use egui::{Color32, Event, Key, Pos2, Rect, Sense, Stroke as EStroke, Ui, Vec2};
 
 use crate::app::App;
 use crate::doc::{Bitmap, DirtyRect, FrameKind};
@@ -205,12 +205,25 @@ impl App {
             }
         }
 
+        // Alt temporarily turns the painting tools into the eyedropper, like
+        // Adobe Animate. The dedicated tool stays active until another is chosen.
+        let quick_pick = alt && matches!(self.tool, Tool::Brush | Tool::Eraser);
+        let picking = !pan_mode && (self.tool == Tool::Eyedropper || quick_pick);
+
         // tool cursor
         if hovered {
             match self.tool {
-                Tool::Brush | Tool::Eraser => ctx.set_cursor_icon(egui::CursorIcon::Crosshair),
+                Tool::Brush | Tool::Eraser | Tool::Eyedropper => {
+                    ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+                }
                 Tool::Hand => ctx.set_cursor_icon(egui::CursorIcon::Grab),
                 Tool::Zoom => ctx.set_cursor_icon(egui::CursorIcon::ZoomIn),
+            }
+        }
+
+        if picking && hovered && primary_pressed {
+            if let Some(p) = pointer {
+                self.pick_color(p, doc_rect);
             }
         }
 
@@ -220,7 +233,7 @@ impl App {
             }
         }
 
-        let painting_tool = matches!(self.tool, Tool::Brush | Tool::Eraser);
+        let painting_tool = matches!(self.tool, Tool::Brush | Tool::Eraser) && !picking;
         if painting_tool && !pan_mode {
             if let Some(p) = pointer {
                 // draw the brush outline (size preview)
@@ -273,6 +286,30 @@ impl App {
         }
 
         let _ = middle_pressed;
+    }
+
+    /// Samples the composited stage colour under the cursor and assigns it to
+    /// the brush fill colour.
+    fn pick_color(&mut self, screen: Pos2, doc_rect: Rect) {
+        if !doc_rect.contains(screen) {
+            return;
+        }
+        let zoom = self.view.zoom.max(0.0001);
+        let x = ((screen.x - doc_rect.left()) / zoom).floor() as i64;
+        let y = ((screen.y - doc_rect.top()) / zoom).floor() as i64;
+        if x < 0 || y < 0 {
+            return;
+        }
+        let Some([r, g, b, a]) = self.doc.sample_pixel(self.current_frame, x as usize, y as usize)
+        else {
+            return;
+        };
+        if a == 0 {
+            self.notify("Picked a transparent pixel");
+            return;
+        }
+        self.brush.color = Color32::from_rgba_unmultiplied(r, g, b, a);
+        self.notify(format!("Picked #{r:02X}{g:02X}{b:02X}"));
     }
 
     fn begin_stroke(&mut self, screen: Pos2, doc_rect: Rect) {
@@ -349,7 +386,6 @@ impl App {
         };
         let d = self.stamp_dab(&mut stroke, doc_pos);
         stroke.dirty = union(stroke.dirty, d);
-        stroke.stamps += 1;
         self.stroke = Some(stroke);
         self.flush_patch();
     }
