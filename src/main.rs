@@ -22,12 +22,18 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1480.0, 930.0])
             .with_min_inner_size([1040.0, 680.0])
-            .with_title("TAniCraft"),
+            .with_title("TAniCraft")
+            .with_decorations(false)          // ← убираем системный заголовок
+            .with_resizable(true)
+            .with_transparent(false),
         ..Default::default()
     };
     eframe::run_native(
         "TAniCraft",
         options,
-        Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
+        Box::new(|cc| {
+            cc.egui_ctx.set_theme(egui::Theme::Dark);
+            Ok(Box::new(app::App::new(cc)))
+        }),
     )
 }

@@ -369,10 +369,16 @@ impl App {
             }
         } else if discard {
             self.unsaved_open = false;
-            self.dirty = false;
             // «Don’t Save» всё равно должен выполнить отложенную команду
-            // (New/Open/Exit), а не молча её терять.
-            if let Some(cmd) = self.pending.take() {
+            // (New/Open/CloseAllProjects/Exit), а не молча её терять. Флаг `dirty` сбрасываем
+            // при выходе и закрытии проектов: документ уничтожается. Для
+            // New/Open документ ещё может остаться (если пользователь отменит
+            // следующий диалог), и изменения обязаны остаться несохранёнными.
+            let cmd = self.pending.take();
+            if discard_clears_dirty(cmd) {
+                self.dirty = false;
+            }
+            if let Some(cmd) = cmd {
                 self.exec(cmd);
             }
         } else if cancel {
@@ -454,5 +460,27 @@ impl App {
 impl DocSetup {
     pub fn bg_color32(&self) -> Color32 {
         self.bg
+    }
+}
+
+/// Сбрасывать ли `dirty` сразу по нажатию «Don’t Save».
+///
+/// Для выхода и закрытия проектов документ уничтожается. Для New/Open он
+/// ещё жив, пока команда действительно не заменит его.
+fn discard_clears_dirty(pending: Option<Cmd>) -> bool {
+    matches!(pending, Some(Cmd::Exit | Cmd::CloseAllProjects))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discard_clears_dirty_for_exit_or_close() {
+        assert!(discard_clears_dirty(Some(Cmd::Exit)));
+        assert!(discard_clears_dirty(Some(Cmd::CloseAllProjects)));
+        assert!(!discard_clears_dirty(Some(Cmd::New)));
+        assert!(!discard_clears_dirty(Some(Cmd::Open)));
+        assert!(!discard_clears_dirty(None));
     }
 }

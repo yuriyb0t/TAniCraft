@@ -1,7 +1,9 @@
 //! Small reusable widgets styled after Adobe panels.
 
+use crate::app::{App, Cmd};
 use crate::icons::{self, Icon};
 use crate::theme;
+use egui::Context;
 use egui::{Color32, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 pub fn panel_frame(fill: Color32) -> egui::Frame {
@@ -95,7 +97,13 @@ pub fn divider(ui: &mut Ui) {
 }
 
 /// A slider row that keeps the label on the left and the value on the right.
-pub fn slider_row(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, decimals: usize) {
+pub fn slider_row(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    decimals: usize,
+) {
     ui.horizontal(|ui| {
         ui.add_sized(
             [72.0, 18.0],
@@ -112,8 +120,7 @@ pub fn slider_row(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::Ra
 /// Colour swatch with a border, used for the fill / stroke chips.
 pub fn swatch(ui: &mut Ui, color: &mut Color32, size: f32) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-    ui.painter()
-        .rect_filled(rect, 1.0, *color);
+    ui.painter().rect_filled(rect, 1.0, *color);
     ui.painter().rect_stroke(
         rect,
         1.0,
@@ -129,4 +136,146 @@ pub fn swatch(ui: &mut Ui, color: &mut Color32, size: f32) -> Response {
         );
     }
     resp
+}
+
+impl App {
+    pub(crate) fn title_bar(&mut self, ctx: &Context) {
+        egui::TopBottomPanel::top("title_bar")
+            .exact_height(28.0)
+            .frame(egui::Frame::NONE.fill(theme::TITLE_BAR))
+            .show(ctx, |ui| {
+                let bar = ui.max_rect();
+                let button_width = 46.0;
+                let buttons_width = button_width * 3.0;
+                let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                let painter = ui.painter();
+
+                painter.text(
+                    bar.left_center() + Vec2::new(10.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    "TAniCraft",
+                    egui::FontId::proportional(12.0),
+                    theme::TITLE_TEXT,
+                );
+
+                let drag_rect = egui::Rect::from_min_max(
+                    bar.min,
+                    egui::pos2((bar.right() - buttons_width).max(bar.left()), bar.bottom()),
+                );
+                let drag_response = ui.interact(
+                    drag_rect,
+                    ui.id().with("title_bar_drag"),
+                    Sense::click_and_drag(),
+                );
+                if drag_response.drag_started() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                } else if drag_response.double_clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                }
+
+                let minimize_rect = egui::Rect::from_min_max(
+                    egui::pos2(bar.right() - buttons_width, bar.top()),
+                    egui::pos2(bar.right() - buttons_width + button_width, bar.bottom()),
+                );
+                let maximize_rect = egui::Rect::from_min_max(
+                    egui::pos2(bar.right() - button_width * 2.0, bar.top()),
+                    egui::pos2(bar.right() - button_width, bar.bottom()),
+                );
+                let close_rect = egui::Rect::from_min_max(
+                    egui::pos2(bar.right() - button_width, bar.top()),
+                    bar.right_bottom(),
+                );
+
+                let minimize = ui
+                    .interact(
+                        minimize_rect,
+                        ui.id().with("title_bar_minimize"),
+                        Sense::click(),
+                    )
+                    .on_hover_text("Minimize");
+                if minimize.hovered() {
+                    painter.rect_filled(minimize_rect, 0.0, theme::BUTTON_HOVER);
+                }
+                let min_center = minimize_rect.center();
+                painter.line_segment(
+                    [
+                        min_center + Vec2::new(-5.0, 3.0),
+                        min_center + Vec2::new(5.0, 3.0),
+                    ],
+                    Stroke::new(1.2_f32, theme::TITLE_TEXT),
+                );
+                if minimize.clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                }
+
+                let maximize_response = ui
+                    .interact(
+                        maximize_rect,
+                        ui.id().with("title_bar_maximize"),
+                        Sense::click(),
+                    )
+                    .on_hover_text(if maximized { "Restore" } else { "Maximize" });
+                if maximize_response.hovered() {
+                    painter.rect_filled(maximize_rect, 0.0, theme::BUTTON_HOVER);
+                }
+                let max_center = maximize_rect.center();
+                if maximized {
+                    let back = egui::Rect::from_center_size(
+                        max_center + Vec2::new(-1.5, 1.0),
+                        Vec2::splat(9.0),
+                    );
+                    let front = egui::Rect::from_center_size(
+                        max_center + Vec2::new(1.5, -1.0),
+                        Vec2::splat(9.0),
+                    );
+                    painter.rect_stroke(
+                        back,
+                        0.0,
+                        Stroke::new(1.0_f32, theme::TITLE_TEXT),
+                        StrokeKind::Inside,
+                    );
+                    painter.rect_stroke(
+                        front,
+                        0.0,
+                        Stroke::new(1.0_f32, theme::TITLE_TEXT),
+                        StrokeKind::Inside,
+                    );
+                } else {
+                    painter.rect_stroke(
+                        egui::Rect::from_center_size(max_center, Vec2::splat(10.0)),
+                        0.0,
+                        Stroke::new(1.0_f32, theme::TITLE_TEXT),
+                        StrokeKind::Inside,
+                    );
+                }
+                if maximize_response.clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                }
+
+                let close_response = ui
+                    .interact(close_rect, ui.id().with("title_bar_close"), Sense::click())
+                    .on_hover_text("Close");
+                if close_response.hovered() {
+                    painter.rect_filled(close_rect, 0.0, Color32::from_rgb(0xc4, 0x2b, 0x1c));
+                }
+                let close_center = close_rect.center();
+                painter.line_segment(
+                    [
+                        close_center + Vec2::new(-4.0, -4.0),
+                        close_center + Vec2::new(4.0, 4.0),
+                    ],
+                    Stroke::new(1.3_f32, theme::TITLE_TEXT),
+                );
+                painter.line_segment(
+                    [
+                        close_center + Vec2::new(4.0, -4.0),
+                        close_center + Vec2::new(-4.0, 4.0),
+                    ],
+                    Stroke::new(1.3_f32, theme::TITLE_TEXT),
+                );
+                if close_response.clicked() {
+                    self.request(Cmd::Exit);
+                }
+            });
+    }
 }

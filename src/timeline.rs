@@ -301,6 +301,15 @@ impl App {
                 ui.close();
             }
             ui.separator();
+            if ui.button("Copy Keyframe      Ctrl+C").clicked() {
+                cmd = Some(Cmd::Copy);
+                ui.close();
+            }
+            if ui.button("Paste Keyframe     Ctrl+V").clicked() {
+                cmd = Some(Cmd::Paste);
+                ui.close();
+            }
+            ui.separator();
             if ui.button("Duplicate Layer").clicked() {
                 cmd = Some(Cmd::DuplicateLayer);
                 ui.close();

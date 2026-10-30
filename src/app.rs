@@ -16,6 +16,7 @@ use crate::ui;
 pub enum Cmd {
     New,
     Open,
+    CloseAllProjects,
     ImportImage,
     Save,
     SaveAs,
@@ -26,8 +27,8 @@ pub enum Cmd {
     Exit,
     Undo,
     Redo,
-    Cut,
     Copy,
+    Paste,
     ClearFrame,
     FitView,
     ZoomIn,
@@ -107,6 +108,7 @@ pub struct App {
     pub doc: Document,
     pub path: Option<PathBuf>,
     pub dirty: bool,
+    pub doc_open: bool,
 
     pub tool: Tool,
     pub brush: BrushSettings,
@@ -128,6 +130,7 @@ pub struct App {
 
     pub history: Vec<UndoAction>,
     pub redo_stack: Vec<UndoAction>,
+    pub keyframe_clipboard: Option<Bitmap>,
 
     pub textures: HashMap<(u64, usize), TexEntry>,
     pub tex_epoch: u64,
@@ -169,6 +172,7 @@ impl App {
             doc,
             path: None,
             dirty: false,
+            doc_open: true,
             tool: Tool::Brush,
             brush: BrushSettings::default(),
             eraser: EraserSettings::default(),
@@ -184,6 +188,7 @@ impl App {
             tl_scroll_y: 0.0,
             history: Vec::new(),
             redo_stack: Vec::new(),
+            keyframe_clipboard: None,
             textures,
             tex_epoch: 0,
             blank_cache: HashMap::new(),
@@ -434,6 +439,7 @@ impl App {
         );
         self.path = None;
         self.dirty = false;
+        self.doc_open = true;
         self.textures.clear();
         self.tex_epoch += 1;
         self.history.clear();
@@ -444,6 +450,32 @@ impl App {
         self.tl_scroll_x = 0.0;
         self.tl_scroll_y = 0.0;
         self.fit_view();
+    }
+
+    fn close_document(&mut self) {
+        self.doc_open = false;
+        self.path = None;
+        self.dirty = false;
+        self.playing = false;
+        self.stroke = None;
+        self.new_doc_open = false;
+        self.doc_props = None;
+        self.layer_props = None;
+        self.about_open = false;
+        self.show_fill_picker = false;
+        self.error_msg = None;
+        self.unsaved_open = false;
+        self.pending = None;
+        self.history.clear();
+        self.redo_stack.clear();
+        self.keyframe_clipboard = None;
+        self.textures.clear();
+        self.blank_cache.clear();
+        self.tex_epoch = self.tex_epoch.wrapping_add(1);
+        self.current_frame = 0;
+        self.sel_layer = 0;
+        self.tl_scroll_x = 0.0;
+        self.tl_scroll_y = 0.0;
     }
 
     pub fn save(&mut self, save_as: bool) -> bool {
@@ -496,6 +528,7 @@ impl App {
                 self.doc = doc;
                 self.path = Some(path.clone());
                 self.dirty = false;
+                self.doc_open = true;
                 self.textures.clear();
                 self.tex_epoch += 1;
                 self.history.clear();
@@ -615,7 +648,13 @@ impl App {
     // -- commands -----------------------------------------------------------
 
     pub fn request(&mut self, cmd: Cmd) {
-        if self.dirty && matches!(cmd, Cmd::New | Cmd::Open | Cmd::Exit) {
+        // Пока открыт диалог несохранённых изменений, новые команды игнорируем:
+        // иначе Ctrl+O подменил бы уже отложенную команду (New/Exit), и кнопка
+        // «Don’t Save» выполнила бы не то действие, о котором спрашивали.
+        if self.unsaved_open {
+            return;
+        }
+        if self.doc_open && self.dirty && command_needs_unsaved_prompt(cmd) {
             self.pending = Some(cmd);
             self.unsaved_open = true;
             return;
@@ -638,6 +677,7 @@ impl App {
                 self.new_doc_open = true;
             }
             Cmd::Open => self.open_file(),
+            Cmd::CloseAllProjects => self.close_document(),
             Cmd::ImportImage => self.import_image(),
             Cmd::Save => {
                 self.save(false);
@@ -654,6 +694,40 @@ impl App {
             }
             Cmd::Undo => self.undo(),
             Cmd::Redo => self.redo(),
+            Cmd::Copy => {
+                let copied = self
+                    .doc
+                    .layers
+                    .get(self.sel_layer)
+                    .and_then(|layer| layer.bitmap_at(self.current_frame))
+                    .cloned();
+                if let Some(bitmap) = copied {
+                    self.keyframe_clipboard = Some(bitmap);
+                    self.notify("Copied keyframe");
+                } else {
+                    self.notify("No keyframe to copy");
+                }
+            }
+            Cmd::Paste => {
+                let Some(bitmap) = self.keyframe_clipboard.clone() else {
+                    self.notify("No copied keyframe");
+                    return;
+                };
+                if bitmap.w != self.doc.width as usize || bitmap.h != self.doc.height as usize {
+                    self.notify("Cannot paste keyframe: canvas size differs");
+                    return;
+                }
+                let before = self.doc.clone();
+                if self
+                    .doc
+                    .paste_keyframe(self.sel_layer, self.current_frame, bitmap)
+                {
+                    self.commit(before);
+                    self.notify("Pasted keyframe");
+                } else {
+                    self.notify("Cannot paste keyframe");
+                }
+            }
             Cmd::FitView => self.fit_view(),
             Cmd::ZoomIn => {
                 self.view.zoom = (self.view.zoom * 1.25).min(40.0);
@@ -779,7 +853,6 @@ impl App {
                 self.layer_props = Some(self.sel_layer);
             }
             Cmd::About => self.about_open = true,
-            Cmd::Cut | Cmd::Copy => self.notify("Not available yet"),
         }
     }
 
@@ -818,6 +891,12 @@ impl App {
                 }
                 if i.key_pressed(Key::E) {
                     cmds.push(Cmd::ExportPng);
+                }
+                if i.key_pressed(Key::C) {
+                    cmds.push(Cmd::Copy);
+                }
+                if i.key_pressed(Key::V) {
+                    cmds.push(Cmd::Paste);
                 }
                 if i.key_pressed(Key::Z) {
                     cmds.push(if shift { Cmd::Redo } else { Cmd::Undo });
@@ -916,6 +995,13 @@ impl App {
             }
         });
 
+        if !self.doc_open {
+            cmds.retain(|cmd| matches!(cmd, Cmd::New | Cmd::Open | Cmd::Exit));
+            tool = None;
+            brush_delta = 0.0;
+            seek_key = None;
+        }
+
         if let Some(t) = tool {
             self.tool = t;
             self.notify(format!("{} ({})", t.name(), t.letter()));
@@ -956,7 +1042,7 @@ impl App {
                     let menu_text = |s: &str| egui::RichText::new(s).size(12.0).color(theme::TEXT);
 
                     ui.menu_button(menu_text("File"), |ui| {
-                        if ui.button("New…            Ctrl+N").clicked() {
+                        if ui.button("New Document…   Ctrl+N").clicked() {
                             cmd = Some(Cmd::New);
                             ui.close();
                         }
@@ -964,179 +1050,197 @@ impl App {
                             cmd = Some(Cmd::Open);
                             ui.close();
                         }
-                        if ui.button("Import Image…").clicked() {
-                            cmd = Some(Cmd::ImportImage);
-                            ui.close();
+                        if self.doc_open {
+                            if ui.button("Close All Projects").clicked() {
+                                cmd = Some(Cmd::CloseAllProjects);
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("Import Image…").clicked() {
+                                cmd = Some(Cmd::ImportImage);
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("Save            Ctrl+S").clicked() {
+                                cmd = Some(Cmd::Save);
+                                ui.close();
+                            }
+                            if ui.button("Save As…    Ctrl+Shift+S").clicked() {
+                                cmd = Some(Cmd::SaveAs);
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("Export Frame (PNG)   Ctrl+E").clicked() {
+                                cmd = Some(Cmd::ExportPng);
+                                ui.close();
+                            }
+                            if ui.button("Export Image Sequence (PNG)…").clicked() {
+                                cmd = Some(Cmd::ExportPngSeq);
+                                ui.close();
+                            }
+                            if ui.button("Export Animated GIF…").clicked() {
+                                cmd = Some(Cmd::ExportGif);
+                                ui.close();
+                            }
+                            if ui.button("Export Video (MP4/WebM)…").clicked() {
+                                cmd = Some(Cmd::ExportVideo);
+                                ui.close();
+                            }
+                            ui.separator();
                         }
-                        ui.separator();
-                        if ui.button("Save            Ctrl+S").clicked() {
-                            cmd = Some(Cmd::Save);
-                            ui.close();
-                        }
-                        if ui.button("Save As…    Ctrl+Shift+S").clicked() {
-                            cmd = Some(Cmd::SaveAs);
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("Export Frame (PNG)   Ctrl+E").clicked() {
-                            cmd = Some(Cmd::ExportPng);
-                            ui.close();
-                        }
-                        if ui.button("Export Image Sequence (PNG)…").clicked() {
-                            cmd = Some(Cmd::ExportPngSeq);
-                            ui.close();
-                        }
-                        if ui.button("Export Animated GIF…").clicked() {
-                            cmd = Some(Cmd::ExportGif);
-                            ui.close();
-                        }
-                        if ui.button("Export Video (MP4/WebM)…").clicked() {
-                            cmd = Some(Cmd::ExportVideo);
-                            ui.close();
-                        }
-                        ui.separator();
                         if ui.button("Exit").clicked() {
                             cmd = Some(Cmd::Exit);
                             ui.close();
                         }
                     });
-                    ui.menu_button(menu_text("Edit"), |ui| {
-                        if ui.button("Undo            Ctrl+Z").clicked() {
-                            cmd = Some(Cmd::Undo);
-                            ui.close();
-                        }
-                        if ui.button("Redo       Ctrl+Shift+Z").clicked() {
-                            cmd = Some(Cmd::Redo);
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("Clear Drawing         Del").clicked() {
-                            cmd = Some(Cmd::ClearFrame);
-                            ui.close();
-                        }
-                    });
-                    ui.menu_button(menu_text("View"), |ui| {
-                        if ui.button("Zoom In          Ctrl++").clicked() {
-                            cmd = Some(Cmd::ZoomIn);
-                            ui.close();
-                        }
-                        if ui.button("Zoom Out         Ctrl+-").clicked() {
-                            cmd = Some(Cmd::ZoomOut);
-                            ui.close();
-                        }
-                        if ui.button("Fit in Window    Ctrl+0").clicked() {
-                            cmd = Some(Cmd::FitView);
-                            ui.close();
-                        }
-                        if ui.button("100%").clicked() {
-                            cmd = Some(Cmd::ActualSize);
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("Onion Skin        Alt+O").clicked() {
-                            toggle_onion = true;
-                            ui.close();
-                        }
-                    });
-                    ui.menu_button(menu_text("Insert"), |ui| {
-                        if ui.button("Frame                   F5").clicked() {
-                            cmd = Some(Cmd::InsertFrame);
-                            ui.close();
-                        }
-                        if ui.button("Keyframe              F6").clicked() {
-                            cmd = Some(Cmd::InsertKey);
-                            ui.close();
-                        }
-                        if ui.button("Blank Keyframe     F7").clicked() {
-                            cmd = Some(Cmd::InsertBlankKey);
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("Remove Frame   Shift+F5").clicked() {
-                            cmd = Some(Cmd::RemoveFrame);
-                            ui.close();
-                        }
-                        if ui.button("Clear Keyframe  Shift+F6").clicked() {
-                            cmd = Some(Cmd::ClearKey);
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("New Layer").clicked() {
-                            cmd = Some(Cmd::NewLayer);
-                            ui.close();
-                        }
-                    });
-                    ui.menu_button(menu_text("Modify"), |ui| {
-                        if ui.button("Document…").clicked() {
-                            cmd = Some(Cmd::DocProps);
-                            ui.close();
-                        }
-                        if ui.button("Layer…").clicked() {
-                            cmd = Some(Cmd::LayerProps);
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("Duplicate Layer").clicked() {
-                            cmd = Some(Cmd::DuplicateLayer);
-                            ui.close();
-                        }
-                        if ui.button("Delete Layer").clicked() {
-                            cmd = Some(Cmd::DeleteLayer);
-                            ui.close();
-                        }
-                    });
-                    ui.menu_button(menu_text("Control"), |ui| {
-                        if ui.button(if self.playing { "Stop" } else { "Play" }).clicked() {
-                            cmd = Some(Cmd::Play);
-                            ui.close();
-                        }
-                        if ui.button("Loop").clicked() {
-                            cmd = Some(Cmd::LoopToggle);
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("First Frame").clicked() {
-                            cmd = Some(Cmd::FirstFrame);
-                            ui.close();
-                        }
-                        if ui.button("Last Frame").clicked() {
-                            cmd = Some(Cmd::LastFrame);
-                            ui.close();
-                        }
-                    });
-                    ui.menu_button(menu_text("Window"), |ui| {
-                        ui.label(egui::RichText::new("Timeline, Tools and Properties are docked.").size(11.0).color(theme::TEXT_DIM));
-                    });
-                    ui.menu_button(menu_text("Help"), |ui| {
-                        if ui.button("About TAniCraft").clicked() {
-                            cmd = Some(Cmd::About);
-                            ui.close();
-                        }
-                        ui.separator();
-                        ui.label(egui::RichText::new("B Brush   E Eraser   I Eyedropper   H Hand   Z Zoom").size(11.0).color(theme::TEXT_DIM));
-                        ui.label(egui::RichText::new("F5 Frame   F6 Keyframe   F7 Blank Key").size(11.0).color(theme::TEXT_DIM));
-                    });
+                    if self.doc_open {
+                        ui.menu_button(menu_text("Edit"), |ui| {
+                            if ui.button("Undo            Ctrl+Z").clicked() {
+                                cmd = Some(Cmd::Undo);
+                                ui.close();
+                            }
+                            if ui.button("Redo       Ctrl+Shift+Z").clicked() {
+                                cmd = Some(Cmd::Redo);
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("Copy Keyframe  Ctrl+C").clicked() {
+                                cmd = Some(Cmd::Copy);
+                                ui.close();
+                            }
+                            if ui.button("Paste Keyframe Ctrl+V").clicked() {
+                                cmd = Some(Cmd::Paste);
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("Clear Drawing         Del").clicked() {
+                                cmd = Some(Cmd::ClearFrame);
+                                ui.close();
+                            }
+                        });
+                        ui.menu_button(menu_text("View"), |ui| {
+                            if ui.button("Zoom In          Ctrl++").clicked() {
+                                cmd = Some(Cmd::ZoomIn);
+                                ui.close();
+                            }
+                            if ui.button("Zoom Out         Ctrl+-").clicked() {
+                                cmd = Some(Cmd::ZoomOut);
+                                ui.close();
+                            }
+                            if ui.button("Fit in Window    Ctrl+0").clicked() {
+                                cmd = Some(Cmd::FitView);
+                                ui.close();
+                            }
+                            if ui.button("100%").clicked() {
+                                cmd = Some(Cmd::ActualSize);
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("Onion Skin        Alt+O").clicked() {
+                                toggle_onion = true;
+                                ui.close();
+                            }
+                        });
+                        ui.menu_button(menu_text("Insert"), |ui| {
+                            if ui.button("Frame                   F5").clicked() {
+                                cmd = Some(Cmd::InsertFrame);
+                                ui.close();
+                            }
+                            if ui.button("Keyframe              F6").clicked() {
+                                cmd = Some(Cmd::InsertKey);
+                                ui.close();
+                            }
+                            if ui.button("Blank Keyframe     F7").clicked() {
+                                cmd = Some(Cmd::InsertBlankKey);
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("Remove Frame   Shift+F5").clicked() {
+                                cmd = Some(Cmd::RemoveFrame);
+                                ui.close();
+                            }
+                            if ui.button("Clear Keyframe  Shift+F6").clicked() {
+                                cmd = Some(Cmd::ClearKey);
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("New Layer").clicked() {
+                                cmd = Some(Cmd::NewLayer);
+                                ui.close();
+                            }
+                        });
+                        ui.menu_button(menu_text("Modify"), |ui| {
+                            if ui.button("Document…").clicked() {
+                                cmd = Some(Cmd::DocProps);
+                                ui.close();
+                            }
+                            if ui.button("Layer…").clicked() {
+                                cmd = Some(Cmd::LayerProps);
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("Duplicate Layer").clicked() {
+                                cmd = Some(Cmd::DuplicateLayer);
+                                ui.close();
+                            }
+                            if ui.button("Delete Layer").clicked() {
+                                cmd = Some(Cmd::DeleteLayer);
+                                ui.close();
+                            }
+                        });
+                        ui.menu_button(menu_text("Control"), |ui| {
+                            if ui.button(if self.playing { "Stop" } else { "Play" }).clicked() {
+                                cmd = Some(Cmd::Play);
+                                ui.close();
+                            }
+                            if ui.button("Loop").clicked() {
+                                cmd = Some(Cmd::LoopToggle);
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("First Frame").clicked() {
+                                cmd = Some(Cmd::FirstFrame);
+                                ui.close();
+                            }
+                            if ui.button("Last Frame").clicked() {
+                                cmd = Some(Cmd::LastFrame);
+                                ui.close();
+                            }
+                        });
+                        ui.menu_button(menu_text("Window"), |ui| {
+                            ui.label(egui::RichText::new("Timeline, Tools and Properties are docked.").size(11.0).color(theme::TEXT_DIM));
+                        });
+                        ui.menu_button(menu_text("Help"), |ui| {
+                            if ui.button("About TAniCraft").clicked() {
+                                cmd = Some(Cmd::About);
+                                ui.close();
+                            }
+                            ui.separator();
+                            ui.label(egui::RichText::new("B Brush   E Eraser   I Eyedropper   H Hand   Z Zoom").size(11.0).color(theme::TEXT_DIM));
+                            ui.label(egui::RichText::new("F5 Frame   F6 Keyframe   F7 Blank Key").size(11.0).color(theme::TEXT_DIM));
+                        });
 
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(6.0);
-                    for (t, icon) in [
-                     /*   (Tool::Brush, Icon::Brush),
-                        (Tool::Eraser, Icon::Eraser),
-                        (Tool::Eyedropper, Icon::Eyedropper),
-                        (Tool::Hand, Icon::Hand),
-                        (Tool::Zoom, Icon::Zoom),*/
-                    ] {
-                        if ui::tool_btn(ui, icon, self.tool == t, &format!("{} ({})", t.name(), t.letter())).clicked() {
-                            tool = Some(t);
+                        ui.add_space(10.0);
+                        ui.separator();
+                        ui.add_space(6.0);
+                        for (t, icon) in [
+                         /*   (Tool::Brush, Icon::Brush),
+                            (Tool::Eraser, Icon::Eraser),
+                            (Tool::Eyedropper, Icon::Eyedropper),
+                            (Tool::Hand, Icon::Hand),
+                            (Tool::Zoom, Icon::Zoom),*/
+                        ] {
+                            if ui::tool_btn(ui, icon, self.tool == t, &format!("{} ({})", t.name(), t.letter())).clicked() {
+                                tool = Some(t);
+                            }
                         }
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(egui::RichText::new("Essentials  ▾").size(11.0).color(theme::TEXT_DIM));
+                            ui.separator();
+                            ui.label(egui::RichText::new("Workspace").size(10.5).color(theme::TEXT_FAINT));
+                        });
                     }
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new("Essentials  ▾").size(11.0).color(theme::TEXT_DIM));
-                        ui.separator();
-                        ui.label(egui::RichText::new("Workspace").size(10.5).color(theme::TEXT_FAINT));
-                    });
                 });
             });
         if let Some(t) = tool {
@@ -1197,10 +1301,10 @@ impl App {
                     let cross = Rect::from_center_size(rect.right_center() - Vec2::new(14.0, 0.0), Vec2::splat(12.0));
                     if ui
                         .interact(cross, ui.id().with("doc_close"), egui::Sense::click())
-                        .on_hover_text("Close document")
+                        .on_hover_text("Close all projects")
                         .clicked()
                     {
-                        cmd = Some(Cmd::New);
+                        cmd = Some(Cmd::CloseAllProjects);
                     }
                     ui.painter().line_segment(
                         [cross.left_top(), cross.right_bottom()],
@@ -1611,11 +1715,15 @@ impl App {
     }
 
     fn update_title(&mut self, ctx: &Context) {
-        let title = format!(
-            "{}{} — TAniCraft",
-            self.doc.name,
-            if self.dirty { " *" } else { "" }
-        );
+        let title = if self.doc_open {
+            format!(
+                "{}{} — TAniCraft",
+                self.doc.name,
+                if self.dirty { " *" } else { "" }
+            )
+        } else {
+            "Home — TAniCraft".to_string()
+        };
         if title != self.title_cache {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title_cache = title;
@@ -1625,37 +1733,97 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        
+        self.title_bar(ctx);           // ← новая строка
+        
         // Перехват закрытия окна ОС: при несохранённых изменениях отменяем
         // закрытие и показываем диалог, иначе даём eframe закрыть окно самому.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.unsaved_open {
-            if self.dirty {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.pending = Some(Cmd::Exit);
-                self.unsaved_open = true;
-            }
+        // CancelClose отправляем и тогда, когда диалог уже открыт: повторный
+        // клик по системному крестику не должен закрывать окно без сохранения.
+        if ctx.input(|i| i.viewport().close_requested())
+            && close_needs_prompt(self.dirty, self.unsaved_open)
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.want_close = false;
+            self.pending = Some(Cmd::Exit);
+            self.unsaved_open = true;
         }
 
         self.tick_status(ctx);
         self.handle_shortcuts(ctx);
         self.menu_bar(ctx);
-        self.tab_bar(ctx);
-        self.status_bar(ctx);
-        self.timeline_panel(ctx);
-        self.tools_panel(ctx);
-        self.properties_panel(ctx);
+        if self.doc_open {
+            self.tab_bar(ctx);
+            self.status_bar(ctx);
+            self.timeline_panel(ctx);
+            self.tools_panel(ctx);
+            self.properties_panel(ctx);
+        }
 
         egui::CentralPanel::default()
             .frame(ui::panel_frame(theme::STAGE_BG))
             .show(ctx, |ui| {
-                self.stage_ui(ui);
+                if self.doc_open {
+                    self.stage_ui(ui);
+                } else {
+                    self.stage_rect = ui.available_rect_before_wrap();
+                }
             });
 
         self.dialogs(ctx);
-        self.update_playback(ctx);
+        if self.doc_open {
+            self.update_playback(ctx);
+        }
         self.update_title(ctx);
         if self.want_close {
+            // `Close` — одноразовая команда: гасим флаг, чтобы не отправлять её
+            // повторно каждый кадр, если окно так и не закрылось (например,
+            // закрытие отменили из-за несохранённых изменений).
+            self.want_close = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
+    }
+}
+
+/// Нужно ли перехватить закрытие окна ОС и спросить о сохранении.
+///
+/// Спрашиваем и при уже открытом диалоге: иначе повторный клик по крестику
+/// закрывает окно вместе с несохранённым рисунком.
+fn close_needs_prompt(dirty: bool, dialog_open: bool) -> bool {
+    dirty || dialog_open
+}
+
+fn command_needs_unsaved_prompt(cmd: Cmd) -> bool {
+    matches!(
+        cmd,
+        Cmd::New | Cmd::Open | Cmd::CloseAllProjects | Cmd::Exit
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn os_close_prompts_for_dirty_document() {
+        assert!(close_needs_prompt(true, false));
+    }
+
+    #[test]
+    fn os_close_does_not_prompt_for_clean_document() {
+        assert!(!close_needs_prompt(false, false));
+    }
+
+    #[test]
+    fn os_close_is_cancelled_while_prompt_is_already_open() {
+        // Повторный клик по системному крестику при открытом диалоге.
+        assert!(close_needs_prompt(true, true));
+        assert!(close_needs_prompt(false, true));
+    }
+
+    #[test]
+    fn closing_projects_prompts_for_unsaved_changes() {
+        assert!(command_needs_unsaved_prompt(Cmd::CloseAllProjects));
     }
 }
 

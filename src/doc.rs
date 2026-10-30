@@ -463,6 +463,26 @@ impl Document {
         }
     }
 
+    /// Insert or replace a keyframe with the supplied drawing.
+    pub fn paste_keyframe(&mut self, layer_idx: usize, frame: usize, bitmap: Bitmap) -> bool {
+        if bitmap.w != self.width as usize || bitmap.h != self.height as usize {
+            return false;
+        }
+        let Some(layer) = self.layers.get_mut(layer_idx) else {
+            return false;
+        };
+        while layer.frames.len() < frame {
+            layer.frames.push(Frame::hold());
+        }
+        let key = Frame::key_from(bitmap);
+        if frame < layer.frames.len() {
+            layer.frames[frame] = key;
+        } else {
+            layer.frames.push(key);
+        }
+        true
+    }
+
     /// Insert Frame (F5): extends the span that contains `frame`.
     pub fn insert_frame(&mut self, layer_idx: usize, frame: usize) {
         let Some(layer) = self.layers.get_mut(layer_idx) else {
@@ -852,6 +872,33 @@ mod tests {
             .unwrap()
             .fill([128, 0, 0, 128]);
         assert_eq!(doc.sample_pixel(0, 1, 1), Some([255, 127, 127, 255]));
+    }
+
+    #[test]
+    fn paste_keyframe_replaces_hold_without_changing_source_key() {
+        let mut doc = Document::new("test", 2, 2, 24.0, [255, 255, 255, 255]);
+        let mut copied = Bitmap::new(2, 2);
+        copied.fill([128, 0, 0, 255]);
+        doc.layers[0].frames[0] = Frame::key_from(copied.clone());
+        doc.insert_frame(0, 0);
+
+        assert!(doc.paste_keyframe(0, 1, copied));
+
+        let layer = &doc.layers[0];
+        assert_eq!(layer.kind_at(0), FrameKind::Key);
+        assert_eq!(layer.kind_at(1), FrameKind::Key);
+        assert_eq!(layer.frames[0].key_bitmap().unwrap().pixels(), &[128, 0, 0, 255].repeat(4));
+        assert_eq!(layer.frames[1].key_bitmap().unwrap().pixels(), &[128, 0, 0, 255].repeat(4));
+    }
+
+    #[test]
+    fn paste_keyframe_rejects_mismatched_canvas_size() {
+        let mut doc = Document::new("test", 2, 2, 24.0, [255, 255, 255, 255]);
+        let before = doc.layers[0].frames.clone();
+
+        assert!(!doc.paste_keyframe(0, 1, Bitmap::new(1, 2)));
+        assert_eq!(doc.layers[0].frames.len(), before.len());
+        assert_eq!(doc.layers[0].kind_at(0), FrameKind::Key);
     }
 }
 

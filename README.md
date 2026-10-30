@@ -122,7 +122,7 @@ A successful build does not replace manual UI verification — see [`docs/DEBUGG
 | Document | New documents, dimensions, FPS, background, properties, resize without scaling |
 | Drawing | Brush with size, hardness, opacity, and smoothing controls; eraser; eyedropper with `Alt`+click sampling |
 | Canvas | Zoom, pan, Fit in Window, 100% view |
-| Timeline | Layers, keyframes, blank keyframes, hold and empty frames; F5/F6/F7 operations |
+| Timeline | Layers, keyframes, blank keyframes, hold and empty frames; F5/F6/F7 operations; copy/paste keyframes |
 | Playback | Play/Stop, frame stepping, looping, document FPS |
 | Layers | Add, duplicate, delete, reorder, show/hide, lock, rename |
 | Onion skin | Preview neighboring keyframes with fading |
@@ -140,6 +140,7 @@ A successful build does not replace manual UI verification — see [`docs/DEBUGG
 | Extend frame | `F5` |
 | Insert keyframe with copied artwork | `F6` |
 | Insert blank keyframe | `F7` |
+| Copy / paste keyframe artwork | `Ctrl+C` / `Ctrl+V` |
 | Remove frame / clear keyframe | `Shift+F5` / `Shift+F6` |
 | Play / Stop | `Enter` |
 | Previous / next frame | `←` / `→` |

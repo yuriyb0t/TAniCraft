@@ -22,7 +22,6 @@ pub struct Stroke {
     pub hardness: f32,
     pub color: [f32; 3],
     pub smoothing: f32,
-    pub stamps: usize,
 }
 
 fn checkerboard(painter: &egui::Painter, rect: Rect) {
@@ -382,7 +381,6 @@ impl App {
             hardness,
             color,
             smoothing: self.brush.smoothing,
-            stamps: 0,
         };
         let d = self.stamp_dab(&mut stroke, doc_pos);
         stroke.dirty = union(stroke.dirty, d);
@@ -403,9 +401,6 @@ impl App {
             s.alpha,
             s.erase,
         );
-        if d.is_some() {
-            s.stamps += 1;
-        }
         d
     }
 
@@ -478,7 +473,7 @@ impl App {
             .and_then(|l| l.frames.get(s.frame))
             .and_then(|f| f.bitmap.clone())
         {
-            if s.stamps > 0 {
+            if s.before.pixels() != after.pixels() {
                 self.push_pixels(s.layer_uid, s.frame, s.before, after);
             }
         }

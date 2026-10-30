@@ -28,6 +28,10 @@ pub const FRAME_HOLD: Color32 = Color32::from_rgb(0x7c, 0x7c, 0x7c);
 pub const FRAME_KEY: Color32 = Color32::from_rgb(0x9c, 0x9c, 0x9c);
 pub const GRID: Color32 = Color32::from_rgb(0x33, 0x33, 0x33);
 pub const GRID_STRONG: Color32 = Color32::from_rgb(0x45, 0x45, 0x45);
+/// Цвет полосы заголовка (совпадает с основным фоном приложения).
+pub const TITLE_BAR: egui::Color32 = egui::Color32::from_rgb(0x2b, 0x2b, 0x2b);
+/// Цвет текста в заголовке.
+pub const TITLE_TEXT: egui::Color32 = egui::Color32::from_rgb(0xe0, 0xe0, 0xe0);
 
 pub fn apply(ctx: &egui::Context) {
     // egui 0.33 выбирает стиль по системной теме (ThemePreference::System по
